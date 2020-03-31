@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Kaldi GStreamer Server Demo</title>
+        <link rel="stylesheet" href="{{ static_url("style.css") }}">
+    </head>
+    <body>
+        <h1>Kaldi GStreamer Server Demo</h1>
+        <datalist id="audio-files">
+            <option value="english_test.raw">
+            <option value="english_test.wav">
+            <option value="english_test.ogg">
+            <option value="bill_gates-TED.mp3">
+            <option value="silence.wav">
+            <option value="empty.raw">
+        </datalist>
+        <datalist id="content-types">
+            <option value="audio/x-raw, layout=(string)interleaved, rate=(int)16000, format=(string)S16LE, channels=(int)1">
+            <option value="audio/x-wav">
+            <option value="audio/ogg">
+            <option value="audio/mp3">
+        </datalist>
+        <h2>Input:</h2>
+        <p>Audio file name: <br><input type="text" id="audio-file" list="audio-files"></p>
+        <p>Audio file type: <br><input type="text" id="content-type" list="content-types"></p>
+        <p>Audio file rate: <br><input type="number" id="rate" value="16000"></p>
+        <p><input type="button" id="init_request" value="Request" onclick="init_request();"></p>
+        <h2>Output:</h2>
+        <p><textarea id="response" rows="5" cols="40"></textarea></p>
+        <script src="{{ static_url("webclient.js") }}" type="text/javascript"></script>
+    </body>
+</html>
