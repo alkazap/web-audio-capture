@@ -1,8 +1,12 @@
-from ws4py.client.threadedclient import WebSocketClient
-from decoder_pipeline import DecoderPipeline
-import logging
 import json
+import logging
 import time
+
+from ws4py.client.threadedclient import WebSocketClient
+import ws4py.messaging
+
+from decoder_pipeline import DecoderPipeline
+
 
 class DecoderSocket(WebSocketClient):
     def __init__(self, url, decoder_pipeline):
@@ -15,38 +19,50 @@ class DecoderSocket(WebSocketClient):
         self.request_id = "<undefined>"
 
     def opened(self):
-        logging.info("DecoderSocket: opened(): called by the server when the upgrade handshake has succeeded")
+        logging.info(
+            "DecoderSocket: opened(): called by the server when the upgrade handshake has succeeded")
 
     def closed(self, code=1000, reason=""):
-        logging.info("DecoderSocket: closed(): WebSocket stream and connection are finally closed")
-        #self.decoder_pipeline.finish_request()
+        logging.info(
+            "DecoderSocket: closed(): WebSocket stream and connection are finally closed")
+        # self.decoder_pipeline.finish_request()
 
     def received_message(self, message):
-        logging.info("DecoderSocket: received_message(): message = %s" % message)
-        json_message = json.loads(str(message))
-        if json_message["type"] == "init_request":
-            self.request_id = json_message["id"]
-            caps = json_message["caps"]
-            self.decoder_pipeline.init_request(self.request_id, caps)
-            filename = "test/data/" + json_message["file"]
-            rate = int(json_message["rate"])
-            self.produce_data(filename, rate)
+        logging.info(
+            "DecoderSocket: received_message(): message(%s) of len=%s" % (type(message), len(message)))
+        if isinstance(message, ws4py.messaging.BinaryMessage):
+            self.decoder_pipeline.process_data(message.data)
+        elif isinstance(message, ws4py.messaging.TextMessage):
+            json_message = json.loads(str(message))
+            logging.info(
+                "DecoderSocket: received_message(): json_message=%s" % json_message)
+            if json_message["type"] == "init_request":
+                self.request_id = json_message["id"]
+                caps = json_message["caps"]
+                self.decoder_pipeline.init_request(self.request_id, caps)
+                try:
+                    filename = "test/data/" + json_message["file"]
+                    self.produce_data(filename)
+                except KeyError:
+                    pass
 
-    def produce_data(self, filename, rate):
-        logging.info("DecoderSocket: produce_data(): filename = %s, rate = %s" %(filename, rate))
+    def produce_data(self, filename):
+        logging.info(
+            "DecoderSocket: produce_data(): filename = %s" % (filename))
         with open(str(filename), 'rb') as f:
-            logging.info("DecoderSocket: produce_data(): started producing data")
-            cunk_size = int(rate/2)
-            for chunk in iter(lambda: f.read(rate), b''):
+            logging.info(
+                "DecoderSocket: produce_data(): started producing data")
+            for chunk in iter(lambda: f.read(8192), b''):
                 time.sleep(0.25)
                 self.decoder_pipeline.process_data(chunk)
-            logging.info("DecoderSocket: produce_data(): finished producing data")
+            logging.info(
+                "DecoderSocket: produce_data(): finished producing data")
             # No more data available
             self.decoder_pipeline.end_request()
             logging.info("DecoderSocket: produce_data(): EOS")
 
     def word_handler(self, word):
-        logging.info("DecoderSocket: word_handler(): %s" %word)
+        logging.info("DecoderSocket: word_handler(): %s" % word)
         message = dict(type="word", data=word)
         self.send(json.dumps(message))
 
@@ -54,10 +70,10 @@ class DecoderSocket(WebSocketClient):
         logging.info("DecoderSocket: eos_handler()")
         message = dict(type="eos")
         self.send(json.dumps(message))
-        #self.close()
+        # self.close()
 
     def error_handler(self, error):
-        logging.info("DecoderSocket: error_handler(): %s" %error)
+        logging.info("DecoderSocket: error_handler(): %s" % error)
         message = dict(type="error", data=error)
         self.send(json.dumps(message))
         self.close()

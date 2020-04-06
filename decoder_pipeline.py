@@ -1,19 +1,19 @@
+from gi.repository import GObject, Gst
 import logging
-# Return a logger with the specified name, creating it if necessary
-logger = logging.getLogger(__name__)
+import os
+import sys
 
 import gi
 # Ensure Gst gets loaded with version 1.0
 gi.require_version('Gst', '1.0')
-from gi.repository import GObject, Gst
-
 # Initialize thread support in PyGObject
 GObject.threads_init()
 # Initialize GStreamer
 Gst.init(None)
 
-import os
-import sys
+# Return a logger with the specified name, creating it if necessary
+logger = logging.getLogger(__name__)
+
 
 class DecoderPipeline():
     def __init__(self, conf=dict(), is_sync=True):
@@ -146,7 +146,7 @@ class DecoderPipeline():
             not self.tee.link(self.queue2) or
             not self.queue1.link(self.filesink) or
             not self.queue2.link(self.asr) or
-            not self.asr.link(self.fakesink)):
+                not self.asr.link(self.fakesink)):
             print("ERROR: Elements could not be linked", file=sys.stderr)
             sys.exit(-1)
         # Add handler for 'pad-added' signal of decodebin
@@ -198,7 +198,7 @@ class DecoderPipeline():
         self.bus.connect('message::error', self._on_error)
         self.bus.connect('sync-message', self._on_sync_message)
         # Сalls '_on_element_message' method every time a new message is posted on the bus
-        if is_sync:  
+        if is_sync:
             # self.bus.set_sync_handler(self.bus.sync_signal_handler)
             self.bus.connect('sync-message::element',
                              self._on_element_message)
@@ -214,7 +214,8 @@ class DecoderPipeline():
                   file=sys.stderr)
             sys.exit(-1)
         else:
-            logger.info("Setting pipeline to READY: %s" % Gst.Element.state_change_return_get_name(ret))
+            logger.info("Setting pipeline to READY: %s" %
+                        Gst.Element.state_change_return_get_name(ret))
 
     def _connect_decoder(self, element, pad):
         """
@@ -240,23 +241,37 @@ class DecoderPipeline():
                     "ERROR: 'decoder' and 'audioconvert' could not be linked", file=sys.stderr)
                 self.pipeline.set_state(Gst.State.NULL)
                 sys.exit(-1)
-        
+
         logger.info("%s: Connected audio decoder" % self.request_id)
-        Gst.debug_bin_to_dot_file(self.pipeline, Gst.DebugGraphDetails.ALL, "%s_connect_decoder" % self.request_id)
+
+        ret = self.decodebin.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            print("ERROR: Unable to set the pipeline to the READY state",
+                  file=sys.stderr)
+            sys.exit(-1)
+        else:
+            logger.info("Setting decodebin to PLAYING: %s" %
+                        Gst.Element.state_change_return_get_name(ret))
+
+        Gst.debug_bin_to_dot_file(
+            self.pipeline, Gst.DebugGraphDetails.ALL, "%s_connect_decoder" % self.request_id)
 
     def _on_sync_message(self, bus, msg):
         if msg.type is Gst.MessageType.STATE_CHANGED:
             old_state, new_state, pending_state = msg.parse_state_changed()
             logger.info("Got sync-msg of type %s from %s: %s -> %s" % (Gst.message_type_get_name(msg.type), msg.src.get_name(),
-                        Gst.Element.state_get_name(old_state), Gst.Element.state_get_name(new_state)))
+                                                                       Gst.Element.state_get_name(old_state), Gst.Element.state_get_name(new_state)))
         elif msg.type is Gst.MessageType.STREAM_STATUS:
             status_type, owner = msg.parse_stream_status()
-            logger.info("Got sync-msg of type %s from %s: status_type=%s" % (Gst.message_type_get_name(msg.type), owner.get_name(), status_type))   
+            logger.info("Got sync-msg of type %s from %s: status_type=%s" %
+                        (Gst.message_type_get_name(msg.type), owner.get_name(), status_type))
         elif msg.type is Gst.MessageType.TAG:
             tag_list = msg.parse_tag()
-            logger.info("Got sync-msg of type %s from %s: %s" % (Gst.message_type_get_name(msg.type), msg.src.get_name(), tag_list.to_string()))
+            logger.info("Got sync-msg of type %s from %s: %s" %
+                        (Gst.message_type_get_name(msg.type), msg.src.get_name(), tag_list.to_string()))
         else:
-            logger.info("Got sync-msg of type %s from %s" % (Gst.message_type_get_name(msg.type), msg.src.get_name()))
+            logger.info("Got sync-msg of type %s from %s" %
+                        (Gst.message_type_get_name(msg.type), msg.src.get_name()))
 
     def _on_element_message(self, bus, msg):
         """
@@ -325,16 +340,19 @@ class DecoderPipeline():
         self.request_id = id
         logger.info("%s: Initializing pipeline" % (self.request_id))
 
-        Gst.debug_bin_to_dot_file(self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_start" % self.request_id)
+        Gst.debug_bin_to_dot_file(
+            self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_start" % self.request_id)
 
         # caps (capabilities) is media type (or content type)
         if caps_str and len(caps_str) > 0:
             self.appsrc.set_property("caps", Gst.caps_from_string(caps_str))
-            logger.info("%s: Set caps to %s" % (self.request_id, self.appsrc.get_property("caps").to_string()))
+            logger.info("%s: Set caps to %s" % (self.request_id,
+                                                self.appsrc.get_property("caps").to_string()))
         else:
             self.appsrc.set_property("caps", None)
 
-        Gst.debug_bin_to_dot_file(self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_set_caps" % self.request_id)
+        Gst.debug_bin_to_dot_file(
+            self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_set_caps" % self.request_id)
 
         if self.outdir:  # change filesink location property /dev/null -> outdir
             self.pipeline.set_state(Gst.State.PAUSED)
@@ -348,20 +366,24 @@ class DecoderPipeline():
             print("ERROR: Unable to set the pipeline to the PLAYING state",
                   file=sys.stderr)
             sys.exit(-1)
-        else: 
-            logger.info("Setting pipeline to PLAYING: %s" % Gst.Element.state_change_return_get_name(ret))
-        
-        Gst.debug_bin_to_dot_file(self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_play_pipeline" % self.request_id)
-        
+        else:
+            logger.info("Setting pipeline to PLAYING: %s" %
+                        Gst.Element.state_change_return_get_name(ret))
+
+        Gst.debug_bin_to_dot_file(
+            self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_play_pipeline" % self.request_id)
+
         ret = self.filesink.set_state(Gst.State.PLAYING)
         if self.filesink.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             print("ERROR: Unable to set the filesink to the PLAYING state",
                   file=sys.stderr)
-            sys.exit(-1)     
-        else: 
-            logger.info("Setting filesink to PLAYING: %s" % Gst.Element.state_change_return_get_name(ret))   
-        
-        Gst.debug_bin_to_dot_file(self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_play_filesink" % self.request_id)
+            sys.exit(-1)
+        else:
+            logger.info("Setting filesink to PLAYING: %s" %
+                        Gst.Element.state_change_return_get_name(ret))
+
+        Gst.debug_bin_to_dot_file(
+            self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_play_filesink" % self.request_id)
 
         # Create a new empty buffer
         buf = Gst.Buffer.new_allocate(None, 0, None)
@@ -370,10 +392,12 @@ class DecoderPipeline():
             # Push empty buffer into the appsrc (to avoid hang on client diconnect)
             self.appsrc.emit("push-buffer", buf)
         else:
-            print("ERROR:init_request():the memory couldn’t be allocated", file=sys.stderr)
+            print("ERROR:init_request():the memory couldn’t be allocated",
+                  file=sys.stderr)
 
         logger.info("%s: Pipeline initialized" % (self.request_id))
-        Gst.debug_bin_to_dot_file(self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_push_empty_buf" % self.request_id)
+        Gst.debug_bin_to_dot_file(
+            self.pipeline, Gst.DebugGraphDetails.ALL, "%s_init_push_empty_buf" % self.request_id)
 
     def process_data(self, data):
         """
@@ -381,7 +405,7 @@ class DecoderPipeline():
         Called from worker.py's recieved_message() (default case)
         """
         logger.info('%s: Pushing buffer of size %d to pipeline' %
-                     (self.request_id, len(data)))
+                    (self.request_id, len(data)))
         # Create a new empty buffer
         buf = Gst.Buffer.new_allocate(None, len(data), None)
         # Copy data to buffer at 0 offset
@@ -390,7 +414,8 @@ class DecoderPipeline():
             # Push empty buffer into the appsrc
             self.appsrc.emit("push-buffer", buf)
         else:
-            print("ERROR:process_data():the memory couldn’t be allocated", file=sys.stderr)
+            print("ERROR:process_data():the memory couldn’t be allocated",
+                  file=sys.stderr)
 
     def end_request(self):
         """
@@ -429,4 +454,5 @@ class DecoderPipeline():
         """
         logger.info("%s: Cancelling pipeline" % self.request_id)
         ret = self.pipeline.send_event(Gst.Event.new_eos())
-        logger.info("%s: Cancelled pipeline, ret = %s" % (self.request_id, str(ret)))
+        logger.info("%s: Cancelled pipeline, ret = %s" %
+                    (self.request_id, str(ret)))

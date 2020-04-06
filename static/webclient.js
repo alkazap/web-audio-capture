@@ -1,74 +1,146 @@
-var ws = null;
+/* eslint-disable no-alert */
+/* eslint-disable no-console */
 
-window.onload = function() {
-    connect();
-};
+let ws = null;
+let mediaRecorder = null;
 
-function connect(){
-    ws = new WebSocket("ws://" + document.location.host + "/webclient");
-    ws.onopen = function(event) {
-        alert(`onopen(): Connected to the server`);
-        //ws.send("Hello from ClientSocket");
-    };
-    ws.onclose = function(event) {
-        alert(`onclose(): WebSocket is closed now`);
-    };
-    ws.onerror = function(event) {
-        alert(`onerror(): WebSocket error: ${event}`);
-        var message = {
-            type : "error",
-            data : event      
+const testButton = document.getElementById('test-button');
+const recordButton = document.getElementById('record-button');
+
+testButton.addEventListener('click', () => {
+  console.log(`testButton.onclick: testButton.value=${testButton.value}, testButton.disabled=${testButton.disabled}`);
+  console.log(`testButton.onclick: recordButton.value=${recordButton.value}, recordButton.diabled=${recordButton.disabled}`);
+  if (testButton.value === 'Start') {
+    const file = document.getElementById('audio-file').value;
+    if (file.length > 0) {
+      const formats = ['raw', 'wav', 'ogg', 'mp3'];
+      const format = file.split('.').pop();
+      if (formats.includes(format)) {
+        const caps = ((format === 'raw') ? 'audio/x-raw, layout=(string)interleaved, rate=(int)16000, format=(string)S16LE, channels=(int)1' : ''); // `audio/x-${format}`)
+        const message = {
+          type: 'init_request',
+          caps: `${caps}`,
+          file: `${file}`,
         };
+        console.log(`testButton.onclick: send message: type=${message.type}, file=${file}, caps=${caps}`);
         ws.send(JSON.stringify(message));
+        testButton.value = 'Stop';
+        recordButton.disabled = true;
+      } else {
+        console.log(`testButton.onclick: Unsupported file format: ${format}`);
+      }
+    } else {
+      alert('Select a file!');
+    }
+  } else if (testButton.value === 'Stop') {
+    const message = {
+      type: 'eos',
     };
-    ws.onmessage = function(event) {
-        var message = JSON.parse(event.data);
-        if (message.type == "word"){
-            var word = message.data;
-            responseElement = document.getElementById("response");
-            if (word == "<#s>"){
-                responseElement.textContent += "\n";
-            } else {
-                responseElement.textContent += word + " ";
-            }
-        } else if (message.type == "eos"){
-            ws.send(JSON.stringify(message))
-        } else if (message.type == "error"){
-            alert(`onmessage(): Decoder error: ${message.data}`);
-        }
+    console.log(`testButton.onclick: send message: type=${message.type}`);
+    ws.send(JSON.stringify(message));
+    testButton.value = 'Start';
+    recordButton.disabled = false;
+  }
+  console.log(`testButton.onclick: testButton.value=${testButton.value}, testButton.disabled=${testButton.disabled}`);
+  console.log(`testButton.onclick: recordButton.value=${recordButton.value}, recordButton.diabled=${recordButton.disabled}`);
+});
+
+recordButton.addEventListener('click', () => {
+  console.log(`recordButton.onclick: recordButton.value=${recordButton.value}, recordButton.diabled=${recordButton.disabled}`);
+  console.log(`recordButton.onclick: testButton.value=${testButton.value}, testButton.disabled=${testButton.disabled}`);
+  if (recordButton.value === 'Start') {
+    const message = {
+      type: 'init_request',
+      caps: '',
     };
-}
-function init_request(){
-    var message = {
-        type : "init_request",
-        file : document.getElementById("audio-file").value,
-        caps : document.getElementById("content-type").value,
-        rate : document.getElementById("rate").value       
+    console.log(`recordButton.onclick: send message: type=${message.type}, caps=${message.caps}`);
+    ws.send(JSON.stringify(message));
+    recordButton.value = 'Stop';
+    testButton.disabled = true;
+    mediaRecorder.start(1000);
+  } else if (recordButton.value === 'Stop') {
+    const message = {
+      type: 'eos',
+    };
+    console.log(`recordButton.onclick: send message: type=${message.type}`);
+    ws.send(JSON.stringify(message));
+    recordButton.value = 'Start';
+    testButton.disabled = false;
+    mediaRecorder.stop();
+  }
+  console.log(`recordButton.onclick: recordButton.value=${recordButton.value}, recordButton.diabled=${recordButton.disabled}`);
+  console.log(`recordButton.onclick: testButton.value=${testButton.value}, testButton.disabled=${testButton.disabled}`);
+  console.log(`recordButton.onclick: mediaRecorder.state: ${mediaRecorder.state}`);
+});
+
+function connect() {
+  console.log(`connect to ws://${document.location.host}/webclient`);
+  ws = new WebSocket(`ws://${document.location.host}/webclient`);
+  ws.addEventListener('open', () => {
+    console.log('ws.onopen: Connected to the server');
+  });
+  ws.addEventListener('close', () => {
+    console.log('ws.onclose: WebSocket is closed now');
+    mediaRecorder.stop();
+    testButton.value = 'Start';
+    recordButton.value = 'Start';
+    testButton.disabled = false;
+    recordButton.disabled = false;
+  });
+  ws.addEventListener('error', (event) => {
+    console.log(`ws.onerror: WebSocket error: ${event}`);
+    const message = {
+      type: 'error',
+      data: event,
     };
     ws.send(JSON.stringify(message));
+  });
+  ws.addEventListener('message', (event) => {
+    const message = JSON.parse(event.data);
+    console.log(`ws.onmessage: Got message of type ${message.type}`);
+    if (message.type === 'word') {
+      const word = message.data;
+      const responseElement = document.getElementById('response');
+      if (word === '<#s>') {
+        responseElement.textContent += '\n';
+      } else {
+        responseElement.textContent += `${word} `;
+      }
+    } else if (message.type === 'eos') {
+      ws.send(JSON.stringify(message));
+    } else if (message.type === 'error') {
+      console.log(`onmessage(): Decoder error: ${message.data}`);
+    }
+  });
 }
 
-
-
-// https://developers.google.com/web/fundamentals/media/recording-audio
-if(navigator.mediaDevices){
+function record() {
+  // https://developers.google.com/web/fundamentals/media/recording-audio
+  if (navigator.mediaDevices) {
     navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-    .then(function(stream) {
-        const context = new AudioContext();
-        const source = context.createMediaStreamSource(stream);
-        // buggerSize must be a power of 2 between 256 and 16384 (try 4096, 8192)
-        const processor = context.createScriptProcessor(8192, 1, 1);
-
-        source.connect(processor);
-        processor.connect(context.destination);
-
-        processor.onaudioprocess = function (e) {
-            ws.send(e.inputBuffer);
-        };
-    })
-    .catch(function(error) {
-        alert(`getUserMedia error: ${error.message}`)
-    });
-} else {
-    alert(`getUserMedia not supported on your browser!`)
+      .then((stream) => {
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm', ignoreMutedMedia: true, audioBitsPerSecond: 16000 });
+        mediaRecorder.addEventListener('dataavailable', (event) => {
+          if (testButton.disabled === true && recordButton.disabled === false) {
+            if (event.data && event.data.size > 0) {
+              console.log(`mediaRecorder.ondataavailable: event.data.size: ${event.data.size}`);
+              event.data.arrayBuffer().then((buffer) => ws.send(buffer));
+            }
+          }
+        });
+        mediaRecorder.addEventListener('error', (event) => {
+          console.log(`mediaRecorder.onerror: MediaRecorder error: ${event}`);
+        });
+      })
+      .catch((error) => {
+        console.log(`getUserMedia error: ${error.message}`);
+      });
+  } else {
+    console.log('getUserMedia not supported on your browser!');
+  }
 }
+
+window.addEventListener('load', () => {
+  connect();
+  record();
+});
