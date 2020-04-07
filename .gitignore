@@ -1,0 +1,8 @@
+__pycache__
+.vscode
+node_modules
+tmp
+.eslintrc.json
+package-lock.json
+package.json
+server.log
