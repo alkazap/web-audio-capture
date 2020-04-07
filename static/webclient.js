@@ -85,7 +85,9 @@ function connect() {
   });
   ws.addEventListener('close', () => {
     console.log('ws.onclose: WebSocket is closed now');
-    mediaRecorder.stop();
+    if (mediaRecorder != null) {
+      mediaRecorder.stop();
+    }
     testButton.value = 'Start';
     recordButton.value = 'Start';
     testButton.disabled = false;
