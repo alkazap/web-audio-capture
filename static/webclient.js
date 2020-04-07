@@ -119,6 +119,7 @@ function connect() {
 }
 
 function record() {
+  /*
   // https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia
   // Older browsers might not implement mediaDevices at all, so we set an empty object first
   if (navigator.mediaDevices === undefined) {
@@ -144,6 +145,7 @@ function record() {
       }));
     };
   }
+  */
   // https://developers.google.com/web/fundamentals/media/recording-audio
   navigator.mediaDevices.getUserMedia({ audio: true, video: false })
     .then((stream) => {
