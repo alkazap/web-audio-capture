@@ -1,4 +1,3 @@
-from gi.repository import GObject, Gst
 import logging
 import os
 import sys
@@ -6,6 +5,7 @@ import sys
 import gi
 # Ensure Gst gets loaded with version 1.0
 gi.require_version('Gst', '1.0')
+from gi.repository import GObject, Gst
 # Initialize thread support in PyGObject
 GObject.threads_init()
 # Initialize GStreamer
