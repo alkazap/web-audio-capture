@@ -154,7 +154,7 @@ def main():
 
     # Parse global options from the command line
     from tornado.options import define, options
-    define("port", default=8888, help="run on the given port", type=int)
+    define("port", default=20005, help="run on the given port", type=int)
     tornado.options.parse_command_line()
 
     # Initialize web application

@@ -72,9 +72,11 @@ recordButton.addEventListener('click', () => {
       mediaRecorder.stop();
     }
   }
+  if (mediaRecorder != null) {
+    console.log(`recordButton.onclick: mediaRecorder.state: ${mediaRecorder.state}`);
+  }
   console.log(`recordButton.onclick: recordButton.value=${recordButton.value}, recordButton.diabled=${recordButton.disabled}`);
   console.log(`recordButton.onclick: testButton.value=${testButton.value}, testButton.disabled=${testButton.disabled}`);
-  console.log(`recordButton.onclick: mediaRecorder.state: ${mediaRecorder.state}`);
 });
 
 function connect() {
