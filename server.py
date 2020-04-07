@@ -65,6 +65,7 @@ class ClientSocketHandler(tornado.websocket.WebSocketHandler):
             message = dict(
                 type="warning", data="No decoder available, try again later")
             self.write_message(json.dumps(message))
+            self.close()
 
     def on_close(self):
         logging.info("ClientSocketHandler[%s]: on_close()" % self.id)

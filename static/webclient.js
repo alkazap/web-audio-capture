@@ -57,7 +57,9 @@ recordButton.addEventListener('click', () => {
     ws.send(JSON.stringify(message));
     recordButton.value = 'Stop';
     testButton.disabled = true;
-    mediaRecorder.start(1000);
+    if (mediaRecorder != null) {
+      mediaRecorder.start(1000);
+    }
   } else if (recordButton.value === 'Stop') {
     const message = {
       type: 'eos',
@@ -66,7 +68,9 @@ recordButton.addEventListener('click', () => {
     ws.send(JSON.stringify(message));
     recordButton.value = 'Start';
     testButton.disabled = false;
-    mediaRecorder.stop();
+    if (mediaRecorder != null) {
+      mediaRecorder.stop();
+    }
   }
   console.log(`recordButton.onclick: recordButton.value=${recordButton.value}, recordButton.diabled=${recordButton.disabled}`);
   console.log(`recordButton.onclick: testButton.value=${testButton.value}, testButton.disabled=${testButton.disabled}`);
@@ -86,6 +90,7 @@ function connect() {
     recordButton.value = 'Start';
     testButton.disabled = false;
     recordButton.disabled = false;
+    connect();
   });
   ws.addEventListener('error', (event) => {
     console.log(`ws.onerror: WebSocket error: ${event}`);
@@ -97,7 +102,7 @@ function connect() {
   });
   ws.addEventListener('message', (event) => {
     const message = JSON.parse(event.data);
-    console.log(`ws.onmessage: Got message of type ${message.type}`);
+    console.log(`ws.onmessage: Got message of type ${message.type}: ${message.data}`);
     if (message.type === 'word') {
       const word = message.data;
       const responseElement = document.getElementById('response');
