@@ -2,3 +2,6 @@ body {
     width: 600px;
     margin: 0 auto;
 }
+textarea {
+    resize: none;
+}
