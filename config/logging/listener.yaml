@@ -1,0 +1,28 @@
+version: 1
+disable_existing_loggers: True
+formatters:
+  detailed:
+    class: logging.Formatter
+    format: '%(asctime)s: %(levelname)-8s: %(name)-24s: %(process)-5d: %(funcName)-24s: %(message)s'
+  simple:
+    class: logging.Formatter
+    format: '%(levelname)-8s: %(name)-24s: %(process)-5d: %(funcName)-24s: %(message)s'
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: simple
+    level: INFO
+  file:
+    class: logging.FileHandler
+    filename: log/mplog.log
+    mode: w
+    formatter: detailed 
+  errors:
+    class: logging.FileHandler
+    filename: log/mplog-errors.log
+    mode: w
+    formatter: detailed
+    level: ERROR
+root: 
+  handlers: [console, file, errors]
+  level: DEBUG  

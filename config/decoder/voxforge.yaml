@@ -1,0 +1,14 @@
+decoder:
+  model: data/models/english/voxforge/tri2b_mmi/model
+  lda-mat: data/models/english/voxforge/tri2b_mmi/matrix
+  fst: data/models/english/voxforge/tri2b_mmi/HCLG.fst
+  word-syms: data/models/english/voxforge/tri2b_mmi/words.txt
+  silence-phones: '1:2:3:4:5'
+  rt-min: 0.8
+  rt-max: 0.85
+  max-active: 4000
+  beam: 12.0
+  acoustic-scale: 0.0769
+out-dir: tmp
+use-cutter: True
+silence-timeout: 10

@@ -15,8 +15,8 @@ function sendMessage(type, data) {
 }
 
 function connect() {
-  const protocol = (document.location.protocol === 'https:') ? 'wss:' : 'ws:';
-  const url = `${protocol}//${document.location.host}/webclient`;
+  const protocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+  const url = `${protocol}//${window.location.host}/webclient`;
   console.log(`Connecting to ${url}`);
   ws = new WebSocket(url);
 

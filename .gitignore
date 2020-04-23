@@ -1,9 +1,10 @@
 __pycache__
 .vscode
 node_modules
-test
+cert
+data
 tmp
 .eslintrc.json
 package-lock.json
 package.json
-server.log
+log

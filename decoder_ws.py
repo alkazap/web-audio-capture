@@ -1,61 +1,104 @@
+import argparse
 import json
 import logging
+import os
+import threading
 import time
+import yaml
 
-from ws4py.client.threadedclient import WebSocketClient
 import ws4py.messaging
+from ws4py.client.threadedclient import WebSocketClient
 
 from decoder_pipeline import DecoderPipeline
+
+CONNECT_TIMEOUT = 5
+SILENCE_TIMEOUT = 10
 
 
 class DecoderSocket(WebSocketClient):
     def __init__(self, url, decoder_pipeline):
-        logging.info("DecoderSocket: __init__(url=%s)" % url)
+        self.url = url
         self.decoder_pipeline = decoder_pipeline
-        super(DecoderSocket, self).__init__(url)
+        WebSocketClient.__init__(self, url=url)
+        self.daemon = False
+        self.log = logging.getLogger(self.__class__.__name__)
         self.decoder_pipeline.set_word_handler(self.word_handler)
         self.decoder_pipeline.set_eos_handler(self.eos_handler)
         self.decoder_pipeline.set_error_handler(self.error_handler)
-        self.request_id = "<undefined>"
+        self.request_id = '<undefined>'
+        self.last_response_time = time.time()
+        self.running = threading.Event()
+        self.log.info("Created new decoder WebSocket(%s)" % (url))
+
+    def timeout_guard(self):
+        while(self.running.is_set()):
+            if (time.time() - self.last_response_time) > SILENCE_TIMEOUT:
+                self.log.warning(
+                    "More than %d secs passed since last decoder response" % (SILENCE_TIMEOUT))
+                self.decoder_pipeline.end_request()
+                message = dict(type='warning', data="silence timeout")
+                try:
+                    self.send(json.dumps(message))
+                    self.close()
+                except RuntimeError:
+                    self.log.error("Cannot send on a terminated websocket")
+                finally:
+                    break
+            time.sleep(1)
 
     def opened(self):
-        logging.info(
-            "DecoderSocket: opened(): called by the server when the upgrade handshake has succeeded")
+        self.log.info("The upgrade handshake has succeeded")
 
-    def closed(self, code=1000, reason=""):
-        logging.info(
-            "DecoderSocket: closed(): WebSocket stream and connection are finally closed")
+    def closed(self, code=1000, reason=''):
+        self.log.info(
+            "WebSocket stream and connection are finally closed: code=%d, reason=%s" % (code, reason))
+        self.running.clear()
         self.decoder_pipeline.finish_request()
+        time.sleep(1)
 
     def received_message(self, message):
-        logging.info(
-            "DecoderSocket: received_message(): message(%s) of len=%s" % (type(message), len(message)))
+        self.log.info("message(%s) of len=%s" % (type(message), len(message)))
         if isinstance(message, ws4py.messaging.BinaryMessage):
             self.decoder_pipeline.process_data(message.data)
         elif isinstance(message, ws4py.messaging.TextMessage):
             json_message = json.loads(str(message))
-            logging.info(
-                "DecoderSocket: received_message(): json_message=%s" % json_message)
-            if json_message["type"] == "caps":
-                self.request_id = json_message["id"]
-                caps = json_message["data"]
+            self.log.info("json_message=%s" % (json_message))
+            if json_message['type'] == 'caps':
+                self.request_id = json_message['id']
+                caps = json_message['data']
                 self.decoder_pipeline.init_request(self.request_id, caps)
-            elif json_message["type"] == "eos":
+                self.last_response_time = time.time()
+                self.running.set()
+                threading.Thread(target=self.timeout_guard,
+                                 name='TimeoutGuard', daemon=False).start()
+            elif json_message['type'] == 'eos':
                 self.decoder_pipeline.end_request()
 
     def word_handler(self, word):
-        logging.info("DecoderSocket: word_handler(): %s" % word)
-        message = dict(type="word", data=word)
-        self.send(json.dumps(message))
+        self.last_response_time = time.time()
+        self.log.info("Got word from decoder_pipeline: %s" % (word))
+        message = dict(type='word', data=word)
+        try:
+            self.send(json.dumps(message))
+        except RuntimeError:
+            self.log.error("Cannot send on a terminated websocket")
 
     def eos_handler(self):
-        logging.info("DecoderSocket: eos_handler()")
-        message = dict(type="eos")
-        self.send(json.dumps(message))
-        self.close()
+        self.running.clear()
+        self.log.info("Got EOS from decoder_pipeline")
+        message = dict(type='eos')
+        try:
+            self.send(json.dumps(message))
+            self.close()
+        except RuntimeError:
+            self.log.error("Cannot send on a terminated websocket")
 
     def error_handler(self, error):
-        logging.info("DecoderSocket: error_handler(): %s" % error)
-        message = dict(type="error", data=error)
-        self.send(json.dumps(message))
-        self.close()
+        self.running.clear()
+        self.log.info("Got error from decoder_pipeline: %s" % (error))
+        message = dict(type='error', data=error)
+        try:
+            self.send(json.dumps(message))
+            self.close()
+        except RuntimeError:
+            self.log.error("Cannot send on a terminated websocket")
