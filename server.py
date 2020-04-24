@@ -25,7 +25,6 @@ from decoder_pipeline import DecoderPipeline
 from decoder_ws import DecoderSocket
 
 
-
 CONNECTION_TIMEOUT = 5
 NUM_WORKERS = 1
 
@@ -64,7 +63,8 @@ class ClientSocketHandler(tornado.websocket.WebSocketHandler):
         self.decoder_socket = None
 
     def open(self):
-        self.reset()
+        self.ip = None
+        self.decoder_socket = None
         # if self.request.remote_ip in {client.ip for client in self.application.client_list}:
         if self.request.remote_ip in self.application.client_list:
             self.log.warn(
@@ -99,7 +99,6 @@ class ClientSocketHandler(tornado.websocket.WebSocketHandler):
         self.application.client_list.discard(self)
         if self.decoder_socket is not None:
             self.decoder_socket.close()
-        self.reset()
 
     def on_message(self, message):
         self.log.info(
@@ -121,10 +120,6 @@ class ClientSocketHandler(tornado.websocket.WebSocketHandler):
     def get_id(self):
         return self.id
 
-    def reset(self):
-        self.ip = None
-        self.decoder_socket = None
-
 
 class DecoderSocketHandler(tornado.websocket.WebSocketHandler):
     def initialize(self):
@@ -134,7 +129,7 @@ class DecoderSocketHandler(tornado.websocket.WebSocketHandler):
 
     def open(self):
         self.log.info("%s: A new decoder WebSocket is opened" % self.id)
-        self.reset()
+        self.client_socket = None
         self.application.decoder_list.add(self)
 
     def on_close(self):
@@ -142,7 +137,6 @@ class DecoderSocketHandler(tornado.websocket.WebSocketHandler):
         self.application.decoder_list.discard(self)
         if self.client_socket is not None:
             self.client_socket.close()
-        self.reset()
 
     def on_message(self, message):
         if self.client_socket is not None:
@@ -161,9 +155,6 @@ class DecoderSocketHandler(tornado.websocket.WebSocketHandler):
 
     def get_id(self):
         return self.id
-
-    def reset(self):
-        self.client_socket = None
 
 
 class DecoderSocketLoop(threading.Thread):

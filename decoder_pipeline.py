@@ -32,6 +32,8 @@ class DecoderPipeline():
 
         self.create_pipeline(conf)
 
+        self.finished = False
+
         # To be assigned by the caller:
         self.word_handler = None
         self.eos_handler = None
@@ -130,6 +132,12 @@ class DecoderPipeline():
             print("ERROR: Elements could not be linked", file=sys.stderr)
             sys.exit(-1)
 
+        if self.use_cutter:
+            if not self.cutter.link(self.audioconvert):
+                print(
+                    "ERROR: 'cutter' and 'audioresample' could not be linked", file=sys.stderr)
+                sys.exit(-1)
+
         # Add handlers for 'pad-added' and 'pad-removed' signals of decodebin
         self.decodebin.connect('pad-added', self.pad_added_handler)
         self.decodebin.connect('pad-removed', self.pad_removed_handler)
@@ -204,15 +212,12 @@ class DecoderPipeline():
                 cutter_pad = self.cutter.get_static_pad('sink')
                 if not cutter_pad.is_linked():
                     if pad.link(cutter_pad) is not Gst.PadLinkReturn.OK:
-                        print("ERROR: 'decoder' and 'cutter' could not be linked",
+                        print("ERROR: 'decodebin' and 'cutter' could not be linked",
                               file=sys.stderr)
                         self.pipeline.set_state(Gst.State.NULL)
                         sys.exit(-1)
-                    if not self.cutter.link(self.audioconvert):
-                        print(
-                            "ERROR: 'cutter' and 'audioconvert' could not be linked", file=sys.stderr)
-                        self.pipeline.set_state(Gst.State.NULL)
-                        sys.exit(-1)
+                    else:
+                        self.log.info("Linked 'decodebin' to 'cutter'")
                 else:
                     self.log.warning("cutter's sink pad is already linked")
             else:
@@ -224,6 +229,8 @@ class DecoderPipeline():
                             "ERROR: 'decoder' and 'audioconvert' could not be linked", file=sys.stderr)
                         self.pipeline.set_state(Gst.State.NULL)
                         sys.exit(-1)
+                    else:
+                        self.log.info("Linked 'decodebin' to 'audioconvert'")
                 else:
                     self.log.warning(
                         "audioconvert's sink pad is already linked")
@@ -300,6 +307,8 @@ class DecoderPipeline():
             # Push empty buffer into the appsrc (to avoid hang on client diconnect)
             self.appsrc.emit('push-buffer', buf)
 
+        self.finished = False
+
         Gst.debug_bin_to_dot_file(
             self.pipeline, Gst.DebugGraphDetails.ALL, '%s_init' % self.request_id)
 
@@ -339,6 +348,7 @@ class DecoderPipeline():
             self.filesink.set_state(Gst.State.PLAYING)
         self.pipeline.set_state(Gst.State.NULL)
         self.request_id = '<undefined>'
+        self.finished = True
 
     def hyp_word_handler(self, asr, word):
         """

@@ -11,8 +11,9 @@ from ws4py.client.threadedclient import WebSocketClient
 
 from decoder_pipeline import DecoderPipeline
 
-CONNECT_TIMEOUT = 5
+
 SILENCE_TIMEOUT = 10
+CONNECT_TIMEOUT = 5
 
 
 class DecoderSocket(WebSocketClient):
@@ -39,7 +40,6 @@ class DecoderSocket(WebSocketClient):
                 message = dict(type='warning', data="silence timeout")
                 try:
                     self.send(json.dumps(message))
-                    self.close()
                 except RuntimeError:
                     self.log.error("Cannot send on a terminated websocket")
                 finally:
@@ -48,13 +48,24 @@ class DecoderSocket(WebSocketClient):
 
     def opened(self):
         self.log.info("The upgrade handshake has succeeded")
+        self.request_id = '<undefined>'
+        self.last_response_time = time.time()
+        self.running.clear()
 
     def closed(self, code=1000, reason=''):
         self.log.info(
             "WebSocket stream and connection are finally closed: code=%d, reason=%s" % (code, reason))
-        self.running.clear()
-        self.decoder_pipeline.finish_request()
-        time.sleep(1)
+        if self.running.is_set:
+            self.log.info("DecoderPipeline is still running, end request")
+            self.decoder_pipeline.end_request()
+        while self.running.is_set():
+            if (time.time() - self.last_response_time) > CONNECT_TIMEOUT:
+                self.log.info("Giving up after %d secs" % CONNECT_TIMEOUT)
+                self.running.clear()
+            time.sleep(1)
+        if not self.decoder_pipeline.finished:
+            self.log.info("Requesting DecoderPipeline to finish")
+            self.decoder_pipeline.finish_request()
 
     def received_message(self, message):
         self.log.info("message(%s) of len=%s" % (type(message), len(message)))
@@ -68,9 +79,9 @@ class DecoderSocket(WebSocketClient):
                 caps = json_message['data']
                 self.decoder_pipeline.init_request(self.request_id, caps)
                 self.last_response_time = time.time()
-                self.running.set()
                 threading.Thread(target=self.timeout_guard,
                                  name='TimeoutGuard', daemon=False).start()
+                self.running.set()
             elif json_message['type'] == 'eos':
                 self.decoder_pipeline.end_request()
 
