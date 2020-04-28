@@ -17,9 +17,13 @@ class DecoderPipeline():
         self.log = logging.getLogger(self.__class__.__name__)
         self.log.info("Initializing DecoderPipeline using conf: %s" % (conf))
 
-        # Audio Cutter to split audio into non-silent bits
+        # Audio cutter to split audio into non-silent bits
         self.use_cutter = conf.get('use-cutter', False)
 
+        # Kaldi online decoder type (NNet if true, GMM if false)
+        self.use_nnet = conf.get('use-nnet', False)
+
+        # Location of the file to write
         self.outdir = conf.get('out-dir', None)
         if self.outdir:
             # doesn't exist
@@ -34,27 +38,43 @@ class DecoderPipeline():
 
         self.finished = False
 
-        # To be assigned by the caller:
+        # To be assigned by the caller
+        # For Kaldi GMM online gmm decoder:
         self.word_handler = None
+        # For Kaldi NNet online decoder:
+        self.result_handler = None
+        self.full_result_handler = None
+        # For both:
         self.eos_handler = None
         self.error_handler = None
         self.request_id = '<undefined>'
 
     def gst_plugin_path_checker(self):
+        element_name = ''
+        so_name = ''
+        if self.use_nnet:
+            element_name = 'kaldinnet2onlinedecoder'
+            so_name = 'libgstkaldinnet2onlinedecoder.so'
+        else:
+            element_name = 'onlinegmmdecodefaster'
+            so_name = 'libgstonlinegmmdecodefaster.so'
         print(
-            "ERROR: Could not create the 'onlinegmmdecodefaster' element", file=sys.stderr)
+            "ERROR: Could not create the '%s' element" % element_name, file=sys.stderr)
         gst_plugin_path = os.environ.get('GST_PLUGIN_PATH')
         if (gst_plugin_path and os.path.isdir(gst_plugin_path)):
-            if not os.path.isfile(os.path.join(gst_plugin_path, 'libgstonlinegmmdecodefaster.so')):
-                print("ERROR: Could not find libgstonlinegmmdecodefaster.so at %s\n"
-                      "       Compile Kaldi GStreamer plugin and try again" % gst_plugin_path, file=sys.stderr)
+            if not os.path.isfile(os.path.join(gst_plugin_path, so_name)):
+                print("ERROR: Could not find %s at %s\n"
+                      "       Compile Kaldi GStreamer plugin and try again" % (so_name, gst_plugin_path), file=sys.stderr)
+            else:
+                print("Found %s at %s\n"
+                      "Compile Kaldi GStreamer plugin and try again" % (so_name, gst_plugin_path), file=sys.stderr)
         else:
             print("ERROR: The environment variable GST_PLUGIN_PATH wasn't set correctly\n"
                   "           GST_PLUGIN_PATH=%s\n"
                   "       Make sure it includes Kaldi's 'src/gst-plugin' directory:\n"
                   "           export GST_PLUGIN_PATH=~/kaldi/src/gst-plugin\n"
                   "       Test if it worked:\n"
-                  "           gst-inspect-1.0 onlinegmmdecodefaster" % gst_plugin_path, file=sys.stderr)
+                  "           gst-inspect-1.0 %s" % (gst_plugin_path, element_name), file=sys.stderr)
         sys.exit(-1)
 
     def create_pipeline(self, conf):
@@ -94,10 +114,47 @@ class DecoderPipeline():
         # Black hole for data
         self.fakesink = Gst.ElementFactory.make('fakesink', 'fakesink')
         # Convert speech to text
-        self.asr = Gst.ElementFactory.make('onlinegmmdecodefaster', 'asr')
+        if self.use_nnet:
+            self.asr = Gst.ElementFactory.make('kaldinnet2onlinedecoder', 'asr')
+        else: 
+            self.asr = Gst.ElementFactory.make('onlinegmmdecodefaster', 'asr')
 
         if not self.asr:
             self.gst_plugin_path_checker()
+
+        ########################
+        # Customize properties #
+        ########################
+        # Whether to act as a live source (default: false)
+        self.appsrc.set_property('is-live', True)
+
+        if self.use_cutter:
+            # Volume threshold before trigger (default: 0.1)
+            self.cutter.set_property('threshold', 0.01)
+            # Length of drop below threshold before cut_stop (default: 500*1000*1000 nanosecs)
+            self.cutter.set_property('run-length', 1000 * 1000000)
+            # Length of pre-recording buffer (default: 200*1000*1000 nanosecs)
+            self.cutter.set_property('pre-length', 1000 * 1000000)
+            # Do we leak buffers when below threshold? (default: false)
+            self.cutter.set_property('leaky', False)
+
+        config_decoder = conf.get('decoder', dict())
+        if self.use_nnet:
+            # Must be set first
+            self.asr.set_property('use-threaded-decoder', config_decoder.pop('use-threaded-decoder', False))
+            self.log.info("Set Kaldi's decoder property: %s = %s" % ('use-threaded-decoder', self.asr.get_property('use-threaded-decoder')))
+            self.asr.set_property('nnet-mode', config_decoder.pop('nnet-mode', 2))
+            self.log.info("Set Kaldi's decoder property: %s = %s" % ('nnet-mode', self.asr.get_property('nnet-mode')))
+
+        for (name, value) in config_decoder.items():
+            self.asr.set_property(name, value)
+            self.log.info("Set Kaldi's decoder property: %s = %s" % (name, self.asr.get_property(name)))
+
+        # initially silence the decoder
+        self.asr.set_property('silent', True)
+
+        # Location of the file to write (default: null)
+        self.filesink.set_property('location', '/dev/null')
 
         ######################
         # Build the pipeline #
@@ -132,6 +189,7 @@ class DecoderPipeline():
             print("ERROR: Elements could not be linked", file=sys.stderr)
             sys.exit(-1)
 
+
         if self.use_cutter:
             if not self.cutter.link(self.audioconvert):
                 print(
@@ -141,33 +199,6 @@ class DecoderPipeline():
         # Add handlers for 'pad-added' and 'pad-removed' signals of decodebin
         self.decodebin.connect('pad-added', self.pad_added_handler)
         self.decodebin.connect('pad-removed', self.pad_removed_handler)
-
-        ########################
-        # Customize properties #
-        ########################
-        # Whether to act as a live source (default: false)
-        self.appsrc.set_property('is-live', True)
-
-        if self.use_cutter:
-            # Volume threshold before trigger (default: 0.1)
-            self.cutter.set_property('threshold', 0.01)
-            # Length of drop below threshold before cut_stop (default: 500*1000*1000 nanosecs)
-            self.cutter.set_property('run-length', 1000 * 1000000)
-            # Length of pre-recording buffer (default: 200*1000*1000 nanosecs)
-            self.cutter.set_property('pre-length', 1000 * 1000000)
-            # Do we leak buffers when below threshold? (default: false)
-            self.cutter.set_property('leaky', False)
-
-        for (name, value) in conf.get('decoder', dict()).items():
-            self.log.info(
-                "Setting Kaldi's decoder property: %s = %s" % (name, value))
-            self.asr.set_property(name, value)
-
-        # initially silence the decoder
-        self.asr.set_property('silent', True)
-
-        # Location of the file to write (default: null)
-        self.filesink.set_property('location', '/dev/null')
 
         ###################################
         # Create bus and connect handlers #
@@ -189,8 +220,12 @@ class DecoderPipeline():
         self.bus.connect('message::error', self.error_handler)
         self.bus.connect('sync-message', self.sync_message_handler)
 
-        # Calls 'hyp_word_handler' method whenever decoding plugin produces a new recognized word
-        self.asr.connect('hyp-word', self.hyp_word_handler)
+        if self.use_nnet:
+            self.asr.connect('partial-result', self.partial_result_handler)
+            self.asr.connect('final-result', self.final_result_handler)
+            self.asr.connect('full-final-result', self.full_final_result_handler)
+        else:
+            self.asr.connect('hyp-word', self.hyp_word_handler)
 
         ret = self.pipeline.set_state(Gst.State.READY)
         if ret == Gst.StateChangeReturn.FAILURE:
@@ -268,8 +303,7 @@ class DecoderPipeline():
         # caps (capabilities) is media type (or content type)
         if caps_str and len(caps_str) > 0:
             self.appsrc.set_property('caps', Gst.caps_from_string(caps_str))
-            self.log.info("Set caps to %s" %
-                          (self.appsrc.get_property('caps').to_string()))
+            self.log.info("Set appsrc property: %s = %s" % ('caps', self.appsrc.get_property('caps').to_string()))
         else:
             self.appsrc.set_property('caps', None)
 
@@ -301,11 +335,11 @@ class DecoderPipeline():
             self.log.info("Setting filesink to PLAYING: %s" %
                           (Gst.Element.state_change_return_get_name(ret)))
         # Create a new empty buffer
-        buf = Gst.Buffer.new_allocate(None, 0, None)
-        if buf:
-            self.log.info("Pushing empty buffer to pipeline")
-            # Push empty buffer into the appsrc (to avoid hang on client diconnect)
-            self.appsrc.emit('push-buffer', buf)
+        #buf = Gst.Buffer.new_allocate(None, 0, None)
+        #if buf:
+        #    self.log.info("Pushing empty buffer to pipeline")
+        #    # Push empty buffer into the appsrc (to avoid hang on client diconnect)
+        #    self.appsrc.emit('push-buffer', buf)
 
         self.finished = False
 
@@ -350,9 +384,33 @@ class DecoderPipeline():
         self.request_id = '<undefined>'
         self.finished = True
 
+    def partial_result_handler(self, asr, result):
+        """
+        'kaldinnet2onlinedecoder' element's 'partial-result' signal callback
+        """
+        self.log.info("Got partial result: %s" % (result))
+        if self.result_handler:
+            self.result_handler(result, False)
+            
+    def final_result_handler(self, asr, result):
+        """
+        'kaldinnet2onlinedecoder' element's 'final-result' signal callback
+        """
+        self.log.info("Got final result: %s" % (result))
+        if self.result_handler:
+            self.result_handler(result, True)
+
+    def full_final_result_handler(self, asr, json_result):
+        """
+        'kaldinnet2onlinedecoder' element's 'full-final-result' signal callback
+        """
+        self.log.info("Got full final result: %s" % (json_result))
+        if self.result_handler:
+            self.full_result_handler(json_result)
+
     def hyp_word_handler(self, asr, word):
         """
-        'hyp-word' signal callback
+        'onlinegmmdecodefaster' element's 'hyp-word' signal callback
         """
         self.log.info("Got word: %s" % (word))
         if self.word_handler:  # from caller
@@ -411,6 +469,12 @@ class DecoderPipeline():
         else:
             self.log.info("Got sync-msg of type %s from %s" %
                           (Gst.message_type_get_name(msg.type), msg.src.get_name()))
+
+    def set_result_handler(self, handler):
+        self.result_handler = handler
+
+    def set_full_result_handler(self, handler):
+        self.full_result_handler = handler
 
     def set_word_handler(self, handler):
         self.word_handler = handler

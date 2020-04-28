@@ -1,4 +1,5 @@
 export GST_PLUGIN_PATH=~/kaldi/src/gst-plugin
+export GST_PLUGIN_PATH=~/gst-kaldi-nnet2-online/src
 export LD_PRELOAD=/opt/intel/mkl/lib/intel64/libmkl_def.so:/opt/intel/mkl/lib/intel64/libmkl_avx2.so:/opt/intel/mkl/lib/intel64/libmkl_core.so:/opt/intel/mkl/lib/intel64/libmkl_intel_lp64.so:/opt/intel/mkl/lib/intel64/libmkl_intel_thread.so:/opt/intel/lib/intel64_lin/libiomp5.so
 export GST_DEBUG_DUMP_DOT_DIR=dot
 python3 server.py --port=20005 --certfile=cert/cert1.pem --keyfile=cert/privkey1.pem

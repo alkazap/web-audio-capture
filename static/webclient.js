@@ -2,6 +2,7 @@
 let ws = null;
 let mediaRecorder = null;
 const recordButton = document.getElementById('record-button');
+let lastResult = '';
 
 function sendMessage(type, data) {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -55,6 +56,27 @@ function connect() {
         responseElement.textContent += '\n';
       } else {
         responseElement.textContent += `${word} `;
+      }
+      responseElement.scrollTop = responseElement.scrollHeight;
+    }
+
+    if (message.type === 'result') {
+      const result = message.data;
+      const responseElement = document.getElementById('response');
+
+      if (lastResult !== result) {
+        if (lastResult.length > 0) {
+          const text = responseElement.textContent;
+          const indexEnd = text.length - lastResult.length - 1;
+          responseElement.textContent = text.substring(0, indexEnd);
+        }
+        responseElement.textContent += `${result} `;
+        lastResult = result;
+      }
+      if (message.final) {
+        console.log('ws.onmessage: Result is final');
+        responseElement.textContent += '\n';
+        lastResult = '';
       }
       responseElement.scrollTop = responseElement.scrollHeight;
     }

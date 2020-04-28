@@ -1,9 +1,0 @@
-version: 1
-disable_existing_loggers: True
-handlers:
-  queue:
-    class: logging.handlers.QueueHandler
-    queue: queue
-root:
-  handlers: [queue]
-  level: DEBUG

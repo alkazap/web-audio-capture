@@ -26,7 +26,7 @@ from decoder_ws import DecoderSocket
 
 
 CONNECTION_TIMEOUT = 5
-NUM_WORKERS = 1
+NUM_WORKERS = 3
 
 
 class Application(tornado.web.Application):
@@ -332,7 +332,8 @@ def main():
     workers = []
 
     config_decoder = {}
-    with open('config/decoder/voxforge.yaml') as f:
+    #with open('config/decoder/voxforge.yaml') as f:
+    with open('config/decoder/fisher.yaml') as f:
         config_decoder = yaml.safe_load(f)
 
     stop_workers = multiprocessing.Event()

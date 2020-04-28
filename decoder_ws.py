@@ -26,8 +26,11 @@ class DecoderSocket(WebSocketClient):
         self.decoder_pipeline.set_word_handler(self.word_handler)
         self.decoder_pipeline.set_eos_handler(self.eos_handler)
         self.decoder_pipeline.set_error_handler(self.error_handler)
+        self.decoder_pipeline.set_result_handler(self.result_handler)
+        self.decoder_pipeline.set_full_result_handler(self.full_result_handler)
         self.request_id = '<undefined>'
         self.last_response_time = time.time()
+        self.last_partial_result = ''
         self.running = threading.Event()
         self.log.info("Created new decoder WebSocket(%s)" % (url))
 
@@ -85,7 +88,20 @@ class DecoderSocket(WebSocketClient):
             elif json_message['type'] == 'eos':
                 self.decoder_pipeline.end_request()
 
-    def word_handler(self, word):
+    def result_handler(self, result:str, final:bool):
+        self.last_response_time = time.time()
+        self.log.info("Got result from decoder_pipeline: %s, final: %s" % (result, final))
+        message = dict(type='result', data=result, final=final)
+        try:
+            self.send(json.dumps(message))
+        except RuntimeError:
+            self.log.error("Cannot send on a terminated websocket")   
+
+    def full_result_handler(self, json_result):
+        self.last_response_time = time.time()
+        self.log.info("Got full result from decoder_pipeline: %s" % (json_result))        
+
+    def word_handler(self, word:str):
         self.last_response_time = time.time()
         self.log.info("Got word from decoder_pipeline: %s" % (word))
         message = dict(type='word', data=word)

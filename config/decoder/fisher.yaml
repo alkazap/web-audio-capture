@@ -1,0 +1,24 @@
+use-nnet: True
+decoder:
+    use-threaded-decoder: true
+    model : data/models/english/fisher_nnet_a_gpu_online/final.mdl
+    fst : data/models/english/fisher_nnet_a_gpu_online/HCLG.fst
+    word-syms : data/models/english/fisher_nnet_a_gpu_online/words.txt
+    phone-syms: data/models/english/fisher_nnet_a_gpu_online/phones.txt
+    word-boundary-file: data/models/english/fisher_nnet_a_gpu_online/word_boundary.int
+    num-nbest: 3
+    num-phone-alignment: 3
+    do-phone-alignment: true
+    feature-type: mfcc
+    mfcc-config : data/models/english/fisher_nnet_a_gpu_online/conf/mfcc.conf
+    ivector-extraction-config : data/models/english/fisher_nnet_a_gpu_online/conf/ivector_extractor.fixed.conf
+    max-active: 7000
+    beam: 11.0
+    lattice-beam: 5.0
+    do-endpointing: true
+    endpoint-silence-phones: "1:2:3:4:5:6:7:8:9:10"
+    chunk-length-in-secs: 0.2
+
+out-dir: tmp
+use-cutter: False
+silence-timeout: 10
