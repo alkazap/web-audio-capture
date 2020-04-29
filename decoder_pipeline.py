@@ -145,6 +145,10 @@ class DecoderPipeline():
             self.log.info("Set Kaldi's decoder property: %s = %s" % ('use-threaded-decoder', self.asr.get_property('use-threaded-decoder')))
             self.asr.set_property('nnet-mode', config_decoder.pop('nnet-mode', 2))
             self.log.info("Set Kaldi's decoder property: %s = %s" % ('nnet-mode', self.asr.get_property('nnet-mode')))
+            self.asr.set_property('fst', config_decoder.pop('fst', ''))
+            self.log.info("Set Kaldi's decoder property: %s = %s" % ('fst', self.asr.get_property('fst')))
+            self.asr.set_property('model', config_decoder.pop('model', ''))
+            self.log.info("Set Kaldi's decoder property: %s = %s" % ('model', self.asr.get_property('model')))
 
         for (name, value) in config_decoder.items():
             self.asr.set_property(name, value)

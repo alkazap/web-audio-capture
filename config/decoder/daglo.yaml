@@ -1,0 +1,28 @@
+use-nnet: True
+decoder:
+  use-threaded-decoder: false
+  nnet-mode: 3
+  model: /data8t/models/streaming/exp/chain_rvb/tdnn1n_rvb_online/final.mdl
+  word-syms: /data8t/models/streaming/exp/chain_rvb/tree_a/graph_tgsmall/words.txt
+  fst : /data8t/models/streaming/exp/chain_rvb/tree_a/graph_tgsmall/HCLG.fst
+  mfcc-config : /data8t/models/streaming/exp/chain_rvb/tdnn1n_rvb_online/conf/mfcc.conf
+  ivector-extraction-config : /data8t/models/streaming/exp/chain_rvb/tdnn1n_rvb_online/conf/ivector_extractor.fixed.conf
+  frames-per-chunk: 20 # default
+  extra-left-context-initial: 0 # default
+  min-active: 200 # default
+  max-active: 7000
+  beam: 15.0 
+  lattice-beam: 6.0
+  acoustic-scale: 1.0 # default (acwt)
+  do-endpointing : true
+  endpoint-silence-phones : "1:2:3:4:5:6:7:8:9:10"
+  traceback-period-in-secs: 0.25
+  chunk-length-in-secs: 0.2
+  num-nbest: 3
+  phone-syms: /data8t/models/streaming/exp/chain_rvb/tree_a/graph_tgsmall/phones.txt
+  word-boundary-file: /data8t/models/streaming/data/lang/phones/word_boundary.int
+  do-phone-alignment: true
+out-dir: tmp
+use-cutter: False
+silence-timeout: 10
+

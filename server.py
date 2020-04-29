@@ -333,7 +333,7 @@ def main():
 
     config_decoder = {}
     #with open('config/decoder/voxforge.yaml') as f:
-    with open('config/decoder/fisher.yaml') as f:
+    with open('config/decoder/daglo.yaml') as f:
         config_decoder = yaml.safe_load(f)
 
     stop_workers = multiprocessing.Event()
