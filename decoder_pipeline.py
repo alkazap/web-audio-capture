@@ -189,7 +189,7 @@ class DecoderPipeline():
             not self.tee.link(self.queue2) or
             not self.queue1.link(self.filesink) or
             not self.queue2.link(self.asr) or
-                not self.asr.link(self.fakesink)):
+            not self.asr.link(self.fakesink)):
             print("ERROR: Elements could not be linked", file=sys.stderr)
             sys.exit(-1)
 

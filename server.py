@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import logging.config
@@ -7,26 +8,16 @@ import os
 import threading
 import time
 import uuid
-import yaml
 
+import psutil
 import tornado.httpserver
 import tornado.ioloop
-import tornado.options
 import tornado.web
 import tornado.websocket
+import yaml
 
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import GLib
-
-from ws4py.exc import HandshakeError
-
-from decoder_pipeline import DecoderPipeline
-from decoder_ws import DecoderSocket
-
-
-CONNECTION_TIMEOUT = 5
-NUM_WORKERS = 3
+from decoder_worker import DecoderWorker
+from decoder_mproc import get_logger, get_workers, term_logger, term_workers
 
 
 class Application(tornado.web.Application):
@@ -34,7 +25,8 @@ class Application(tornado.web.Application):
         handlers = [
             (r'/', IndexHandler),
             (r'/webclient', ClientSocketHandler),
-            (r'/decoder', DecoderSocketHandler)
+            (r'/decoder', DecoderSocketHandler),
+            (r'/sysinfo', SysInfoSocketHandler)
         ]
         settings = dict(
             template_path=os.path.join(os.path.dirname(__file__), 'templates'),
@@ -42,8 +34,50 @@ class Application(tornado.web.Application):
         )
         tornado.web.Application.__init__(self, handlers, **settings)
 
-        self.decoder_list = set()
-        self.client_list = set()
+        self.decoder_socket_list = set()
+        self.client_socket_list = set()
+        self.sys_info_socket_list = set()
+
+    def get_sys_info(self):
+        sys_info = {cpu_num: {'procs': {}, 'cpu_percent': 0, 'memory_percent': 0}
+                    for cpu_num in range(psutil.cpu_count())}
+        for proc in psutil.process_iter(attrs=['cmdline', 'cpu_num', 'memory_percent']):
+            proc_name = ''
+            if len(proc.info['cmdline']) > 1 and 'python' in proc.info['cmdline'][0]:
+                cmdline = ' '.join(proc.info['cmdline'])
+                if 'multiprocessing.spawn' in cmdline:
+                    proc_name = 'mproc'
+                elif 'multiprocessing.semaphore_tracker' in cmdline:
+                    proc_name = 'mp_tracker'
+                elif '.py' in proc.info['cmdline'][1]:
+                    proc_name = proc.info['cmdline'][1].split('.')[0]
+            if len(proc_name) > 0:
+                proc_info = proc.as_dict(
+                    attrs=['pid', 'cpu_percent', 'memory_percent', 'num_threads'])
+                proc_info['name'] = proc_name
+                # if len(proc_info['cpu_affinity']) == psutil.cpu_count():
+                #    proc_info['cpu_affinity'] = "all"
+                #import datetime
+                #proc_info['create_time'] = datetime.datetime.fromtimestamp(proc_info['create_time']).strftime("%Y-%m-%d %H:%M:%S")
+                proc_info['memory_percent'] = "%.1f" % proc_info['memory_percent']
+                proc_num = len(sys_info[proc.info['cpu_num']]['procs'])
+                sys_info[proc.info['cpu_num']]['procs'][proc_num] = proc_info
+            sys_info[proc.info['cpu_num']
+                     ]['memory_percent'] += proc.info['memory_percent']
+        cpu_percent = psutil.cpu_percent(percpu=True)
+        for cpu_num in range(psutil.cpu_count()):
+            sys_info[cpu_num]['cpu_percent'] = cpu_percent[cpu_num]
+            sys_info[cpu_num]['memory_percent'] = "%.1f" % sys_info[cpu_num]['memory_percent']
+        return sys_info
+
+    def send_sys_info_update(self):
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        while True:
+            if len(self.sys_info_socket_list) > 0:
+                sys_info = self.get_sys_info()
+                for ws in self.sys_info_socket_list:
+                    ws.write_message(json.dumps(sys_info))
+            time.sleep(1)
 
 
 class IndexHandler(tornado.web.RequestHandler):
@@ -53,6 +87,23 @@ class IndexHandler(tornado.web.RequestHandler):
 
     def get(self):
         self.render('index.html')
+
+
+class SysInfoSocketHandler(tornado.websocket.WebSocketHandler):
+    def initialize(self):
+        self.log = logging.getLogger(self.__class__.__name__)
+        self.ip = None
+
+    def open(self):
+        self.ip = self.request.remote_ip
+        self.log.info("A new sys info listener WebSocket(%s) is opened" %
+                      (self.ip))
+        self.application.sys_info_socket_list.add(self)
+
+    def on_close(self):
+        self.log.info("The sys info listener WebSocket(%s) is closed" %
+                      (self.ip))
+        self.application.sys_info_socket_list.discard(self)
 
 
 class ClientSocketHandler(tornado.websocket.WebSocketHandler):
@@ -65,8 +116,7 @@ class ClientSocketHandler(tornado.websocket.WebSocketHandler):
     def open(self):
         self.ip = None
         self.decoder_socket = None
-        # if self.request.remote_ip in {client.ip for client in self.application.client_list}:
-        if self.request.remote_ip in self.application.client_list:
+        if self.request.remote_ip in {client.ip for client in self.application.client_socket_list}:
             self.log.warn(
                 "%s: Multiple clients with the same IP(%s) are not allowed" % (self.id, self.request.remote_ip))
             message = dict(
@@ -75,28 +125,27 @@ class ClientSocketHandler(tornado.websocket.WebSocketHandler):
             self.close()
         else:
             self.ip = self.request.remote_ip
-            self.application.client_list.add(self)
+            self.application.client_socket_list.add(self)
             self.log.info("%s: A new client WebSocket(%s) is opened" %
                           (self.id, self.ip))
-
-        try:
-            self.decoder_socket = self.application.decoder_list.pop()
-            self.decoder_socket.set_client_socket(self)
-            self.log.info("%s: Decoder available: %s" % (
-                self.id, self.decoder_socket.get_id()))
-        except KeyError:
-            # Raised when a mapping (dictionary) key is not found in the set of existing keys
-            self.log.warn(
-                "%s: No decocoder available" % self.id)
-            message = dict(
-                type='warning', data='No decoder available, try again later')
-            self.write_message(json.dumps(message))
-            self.close()
+            try:
+                self.decoder_socket = self.application.decoder_socket_list.pop()
+                self.decoder_socket.set_client_socket(self)
+                self.log.info("%s: Decoder available: %s" % (
+                    self.id, self.decoder_socket.get_id()))
+            except KeyError:
+                # Raised when a mapping (dictionary) key is not found in the set of existing keys
+                self.log.warn(
+                    "%s: No decocoder available" % self.id)
+                message = dict(
+                    type='warning', data='No decoder available, try again later')
+                self.write_message(json.dumps(message))
+                self.close()
 
     def on_close(self):
         self.log.info("%s: The client WebSocket(%s) is closed" %
                       (self.id, self.ip))
-        self.application.client_list.discard(self)
+        self.application.client_socket_list.discard(self)
         if self.decoder_socket is not None:
             self.decoder_socket.close()
 
@@ -130,11 +179,11 @@ class DecoderSocketHandler(tornado.websocket.WebSocketHandler):
     def open(self):
         self.log.info("%s: A new decoder WebSocket is opened" % self.id)
         self.client_socket = None
-        self.application.decoder_list.add(self)
+        self.application.decoder_socket_list.add(self)
 
     def on_close(self):
         self.log.info("%s: The decoder WebSocket is closed" % self.id)
-        self.application.decoder_list.discard(self)
+        self.application.decoder_socket_list.discard(self)
         if self.client_socket is not None:
             self.client_socket.close()
 
@@ -157,226 +206,103 @@ class DecoderSocketHandler(tornado.websocket.WebSocketHandler):
         return self.id
 
 
-class DecoderSocketLoop(threading.Thread):
-    def __init__(self, url, decoder_pipeline, stop_event, **kwargs):
-        threading.Thread.__init__(self, **kwargs)
-        self.url = url
-        self.decoder_pipeline = decoder_pipeline
-        self.stop_event = stop_event
-        self.log = logging.getLogger(self.__class__.__name__)
-        self.ws = None
-
-    def run(self):
-        self.log.info("About to enter the loop")
-        threading.Thread(target=self.event_listener,
-                         name="EventListener").start()
-        while not self.stop_event.is_set():
-            self.log.info("Entered the loop")
-            self.ws = DecoderSocket(self.url, self.decoder_pipeline)
-            try:
-                self.log.info("Connecting decoder websocket to the server")
-                self.ws.connect()
-                # Block the thread until the websocket has terminated
-                self.ws.run_forever()
-            except HandshakeError:
-                self.log.error(
-                    "Could not connect decoder websocket to the server, waiting for %d sec" % CONNECTION_TIMEOUT)
-                # Connection timeout
-                time.sleep(CONNECTION_TIMEOUT)
-            # Fixes race condition
-            time.sleep(1)
-        self.log.info("Left the loop")
-
-    def event_listener(self):
-        self.log.info("Waiting for stop event")
-        self.stop_event.wait()
-        self.log.info("Got stop event")
-        self.ws.close_connection()
-
-
-class DecoderProcess(multiprocessing.Process):
-    def __init__(self, queue: multiprocessing.Queue, url: str, conf: dict, stop_event: multiprocessing.Event, **kwargs):
-        multiprocessing.Process.__init__(self, **kwargs)
-        self.url = url
-        self.queue = queue
-        self.conf = conf
-        self.stop_event = stop_event
-
-    def log_config(self):
-        config = {
-            'version': 1,
-            'disable_existing_loggers': True,
-            'handlers': {
-                'queue': {
-                    'class': 'logging.handlers.QueueHandler',
-                    'queue': self.queue
-                }
-            },
-            'root': {
-                'handlers': ['queue'],
-                'level': 'DEBUG'
-            }
-        }
-        logging.config.dictConfig(config)
-        self.log = logging.getLogger(self.__class__.__name__)
-        self.log.info("Configured logger")
-
-    def run(self):
-        self.log_config()
-        self.decoder_pipeline = DecoderPipeline(self.conf)
-        self.log.info("Configured DecoderPipeline")
-        # GLib MainLoop doesn't steal SIGINGT (unlike GObject)
-        self.main_loop = GLib.MainLoop.new(None, False)
-        self.main_loop_thread = threading.Thread(
-            target=self.main_loop.run, name='GLibMainLoop', args=())
-        self.main_loop_thread.start()
-        # Create decoder websocket
-        self.stop_socket_loop = threading.Event()
-        self.socket_loop_thread = DecoderSocketLoop(
-            self.url, self.decoder_pipeline, self.stop_event)
-        self.socket_loop_thread.start()
-
-        self.log.info("Waiting for stop event")
-        try:
-            self.stop_event.wait()
-        except KeyboardInterrupt:
-            self.log.info("Got SIGINT")
-        finally:
-            self.stop_event.wait()
-            self.log.info("Got stop event")
-            self.stop_socket_loop.set()
-            self.socket_loop_thread.join()
-            if self.main_loop.is_running():
-                self.main_loop.quit()
-            self.main_loop_thread.join()
-
-
-class ListenerProcess(multiprocessing.Process):
-    def __init__(self, queue, config, stop_event, **kwargs):
-        multiprocessing.Process.__init__(self, **kwargs)
-        self.queue = queue
-        self.config = config
-        self.stop_event = stop_event
-
-    def run(self):
-        logging.config.dictConfig(self.config)
-        self.log = logging.getLogger(self.__class__.__name__)
-        self.listener = logging.handlers.QueueListener(
-            self.queue, *logging.getLogger().handlers, respect_handler_level=True)
-        self.listener.start()
-        self.log.info("Waiting for stop event")
-
-        try:
-            self.stop_event.wait()
-        except KeyboardInterrupt:
-            self.log.info("Got SIGINT")
-        finally:
-            self.stop_event.wait()
-            self.log.info("Got stop event")
-            self.listener.stop()
-
-
 def main():
+    # Parse arguments
+    from arg_parser import parse_args
+    try:
+        args = parse_args(server=True)
+    except SystemExit:
+        return
+
+    # Configure logger
     config_logger = {}
-    with open('config/logging/server.yaml') as f:
+    with open(args.log) as f:
         config_logger = yaml.safe_load(f)
     logging.config.dictConfig(config_logger)
 
-    # Parse global options from the command line
-    from tornado.options import define, options
-    define('port', default=8888, help='run on the given port', type=int)
-    define('hostname', default='localhost', help='run on the given hostname')
-    define('certfile', default='',
-           help='certificate file for secured SSL connection')
-    define('keyfile', default='', help='key file for secured SSL connection')
-    tornado.options.parse_command_line()
-
     # Initialize web application
     app = Application()
-
+    # Check SSL options
     ssl = False
-    if options.certfile and options.keyfile:
+    if args.certfile and args.keyfile:
         ssl = True
         ssl_options = {
-            'certfile': options.certfile,
-            'keyfile': options.keyfile,
+            'certfile': args.certfile,
+            'keyfile': args.keyfile,
         }
         logging.info("Using SSL for serving requests")
         # Starts an HTTP server for this app
-        app.listen(options.port, ssl_options=ssl_options)
+        app.listen(args.port, ssl_options=ssl_options)
     else:
         # Start an HTTP server for this app
-        app.listen(options.port)
+        app.listen(args.port)
 
-    # Construct decoder websocket url
-    protocol = ''
-    if ssl:
-        protocol = 'wss:'
-    else:
-        protocol = 'ws:'
-    host = options.hostname + ':' + str(options.port)
-    url = protocol + '//' + host + '/decoder'
-    logging.info("Decoder websocket url=%s" % url)
+    # Send sys info updates
+    threading.Thread(target=app.send_sys_info_update, args=(),
+                     name='SysInfoUpdate', daemon=True).start()
 
-    # Multiprocessing
-    multiprocessing.set_start_method('spawn')
-    queue = multiprocessing.Queue(-1)
+    # Only start server
+    if args.nproc == 0:
+        try:
+            # I/O event loop for non-blocking sockets
+            tornado.ioloop.IOLoop.current().start()
+        except KeyboardInterrupt:
+            tornado.ioloop.IOLoop.current().stop()
+            tornado.ioloop.IOLoop.current().close()
+    # Start decoder
+    elif args.nproc > 0:
+        # Construct decoder websocket url
+        protocol = 'ws'
+        if ssl:
+            protocol += 's'
+        host = 'localhost' + ':' + str(args.port)
+        url = protocol + '://' + host + '/decoder'
+        logging.info("Decoder websocket url=%s" % url)
+        # One decoder in same process
+        if args.nproc == 1:
+            # Run decoder worker
+            decoder_worker = DecoderWorker(conf_file=args.conf, url=url)
+            try:
+                decoder_worker.run()
+            except SystemExit:
+                return
 
-    num_workers = NUM_WORKERS
-    if (NUM_WORKERS > int(multiprocessing.cpu_count()/2)):
-        logging.warning(
-            "Not allowed number of worker processes: %d" % num_workers)
-        num_workers = int(multiprocessing.cpu_count()/2)
-        logging.info("Set number of worker processes to %d" % num_workers)
+            try:
+                # I/O event loop for non-blocking sockets
+                tornado.ioloop.IOLoop.current().start()
+            except KeyboardInterrupt:
+                decoder_worker.stop()
+                decoder_worker.cleanup()
+                tornado.ioloop.IOLoop.current().stop()
+                tornado.ioloop.IOLoop.current().close()
+        # Multiple decoders with multiprocessing
+        else:
+            multiprocessing.set_start_method('spawn')
+            queue = multiprocessing.Queue(-1)
 
-    workers = []
+            stop_workers = multiprocessing.Event()
+            workers = get_workers(queue=queue, conf_file=args.conf,
+                                  url=url, stop_event=stop_workers, num_workers=args.nproc)
 
-    config_decoder = {}
-    #with open('config/decoder/voxforge.yaml') as f:
-    with open('config/decoder/daglo.yaml') as f:
-        config_decoder = yaml.safe_load(f)
+            stop_logger = multiprocessing.Event()
+            logger = get_logger(queue=queue, conf_file=args.mplog,
+                                stop_event=stop_logger)
 
-    stop_workers = multiprocessing.Event()
-    for i in range(num_workers):
-        worker = DecoderProcess(
-            queue, url, config_decoder, stop_workers, name='Worker%d' % (i+1))
-        workers.append(worker)
-        worker.start()
+            # Send sys info updates
+            #threading.Thread(target=app.send_sys_info_update, args=(os.getpid(), [worker.pid for worker in workers], logger.pid), name='SysInfoUpdate', daemon=True).start()
 
-    stop_listener = multiprocessing.Event()
-    config_listener = {}
-    with open('config/logging/listener.yaml') as file:
-        config_listener = yaml.safe_load(file)
-    listener = ListenerProcess(
-        queue, config_listener, stop_listener, name='Listener')
-    listener.start()
-
-    # I/O event loop for non-blocking sockets
-    try:
-        tornado.ioloop.IOLoop.current().start()
-    except KeyboardInterrupt:
-        logging.info("Got SIGINT")
-    finally:
-        stop_workers.set()
-        for worker in workers:
-            worker.join()
-        while workers:
-            worker = workers.pop()
-            if worker.is_alive():
-                print("%s(%s) process is alive" % (worker.name, worker.pid))
-                worker.terminate()
-            logging.info("%s(%s) process exitcode=%s" %
-                         (worker.name, worker.pid, worker.exitcode))
-        stop_listener.set()
-        listener.join()
-        if listener.is_alive():
-            print("%s(%s) process is alive" % (worker.name, worker.pid))
-            listener.terminate()
-        logging.info("%s(%s) process exitcode=%s" %
-                     (listener.name, listener.pid, listener.exitcode))
-        queue.close()
-        tornado.ioloop.IOLoop.current().stop()
-        tornado.ioloop.IOLoop.current().close()
+            try:
+                # I/O event loop for non-blocking sockets
+                tornado.ioloop.IOLoop.current().start()
+            except KeyboardInterrupt:
+                stop_workers.set()
+                term_workers(workers)
+            finally:
+                stop_logger.set()
+                term_logger(logger)
+                queue.close()
+                tornado.ioloop.IOLoop.current().stop()
+                tornado.ioloop.IOLoop.current().close()
 
 
 if __name__ == '__main__':
